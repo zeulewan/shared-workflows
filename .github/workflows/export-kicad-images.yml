@@ -121,6 +121,11 @@ jobs:
           mogrify -trim +repage images/board.front.png
           mogrify -trim +repage images/board.back.png
 
+      # Clean up temporary files
+      - name: Clean up temp files
+        run: |
+          rm -rf kicad-packages3D
+
       # Commit and push changes
       - name: Commit and push images
         run: |
