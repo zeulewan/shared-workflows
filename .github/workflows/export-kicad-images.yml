@@ -2,11 +2,6 @@ name: Export KiCad Images
 
 on:
   workflow_call:
-    secrets:
-      APP_ID:
-        required: true
-      APP_PRIVATE_KEY:
-        required: true
 
 jobs:
   export:
@@ -14,18 +9,8 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      # 1) Retrieve the GitHub App token
-      - id: create_app_token
-        uses: tibdex/github-app-token@v2.1.0
-        with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      # 2) Check out the repository so we can modify files
       - name: Check out code
-        uses: actions/checkout@v3
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v4
 
       - name: Set up Docker
         uses: docker/setup-buildx-action@v2
@@ -109,8 +94,6 @@ jobs:
                 kicad/*.kicad_pcb
 
               # Export high-detail 3D STEP model
-              # Some boards cause 'Wire self-interference' warnings and a non-zero exit,
-              # but still produce a valid STEP file. Treat that as a warning, not a hard failure.
               if ! kicad-cli pcb export step \
                 --output 'images/board.step' \
                 --force \
@@ -133,20 +116,14 @@ jobs:
           mogrify -trim +repage images/board.front.png
           mogrify -trim +repage images/board.back.png
 
-      # 3) Configure Git user/email
-      - name: Configure Git
+      # Commit and push changes
+      - name: Commit and push images
         run: |
-          git config user.name "KiCad Export Bot"
-          git config user.email "kicad-export-bot[bot]@users.noreply.github.com"
-
-      # 5) Commit and push changes to main using the GitHub App token
-      - name: Commit changes using the App token
-        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add images/*
           git commit -m "Update KiCad images" || echo "No changes to commit."
-          git remote set-url origin "https://x-access-token:${{ steps.create_app_token.outputs.token }}@github.com/${{ github.repository }}.git"
-          git push origin main
+          git push
 
-      # 6) Notify completion
       - name: Notify completion
         run: echo "Updated images and pushed changes to the repository."
