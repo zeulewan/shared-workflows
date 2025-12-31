@@ -126,9 +126,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase
           git add images/*
           git commit -m "Update KiCad images" || echo "No changes to commit."
+          git pull --rebase
           git push
 
       - name: Notify completion
