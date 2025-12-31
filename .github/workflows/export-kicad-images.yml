@@ -110,6 +110,11 @@ jobs:
               fi
             "
 
+      # Fix permissions after Docker creates files as root
+      - name: Fix image permissions
+        run: |
+          sudo chown -R $(whoami):$(id -gn) images/
+
       # Crop the rendered 3D board images in-place using ImageMagick
       - name: Crop rendered board images
         run: |
