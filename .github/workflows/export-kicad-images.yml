@@ -1,0 +1,152 @@
+name: Export KiCad Images
+
+on:
+  workflow_call:
+    secrets:
+      APP_ID:
+        required: true
+      APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  export:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      # 1) Retrieve the GitHub App token
+      - id: create_app_token
+        uses: tibdex/github-app-token@v2.1.0
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      # 2) Check out the repository so we can modify files
+      - name: Check out code
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+
+      - name: Pull KiCad 9.0 Docker image
+        run: |
+          echo "Pulling KiCad 9.0 Docker image..."
+          docker pull kicad/kicad:9.0
+
+      - name: Set directory permissions
+        run: |
+          echo "Setting directory permissions to 777..."
+          sudo chmod -R 777 .
+
+      # Fetch official KiCad 3D models from GitLab
+      - name: Clone KiCad 3D model library
+        run: |
+          git clone --depth 1 https://gitlab.com/kicad/libraries/kicad-packages3D.git kicad-packages3D
+
+      # Install ImageMagick on the runner for cropping
+      - name: Install ImageMagick
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
+      # Run KiCad Docker container to export files
+      - name: Export schematic, PCB, 3D render, and STEP
+        run: |
+          echo "Exporting schematic, PCB, 3D renders, and 3D model..."
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            kicad/kicad:9.0 \
+            bash -c "
+              # Point both KiCad 8 and 9 3D env vars at the cloned library
+              export KICAD8_3DMODEL_DIR=/workspace/kicad-packages3D
+              export KICAD9_3DMODEL_DIR=/workspace/kicad-packages3D
+
+              mkdir -p images
+
+              # Export schematic
+              kicad-cli sch export svg -o 'images/sch' kicad/*.kicad_sch
+              mv images/sch/*.svg images/sch.svg
+              rm -r images/sch
+
+              # Export PCB front (2D)
+              kicad-cli pcb export svg --mode-single \
+                -o 'images/pcbf.svg' \
+                --page-size-mode 2 \
+                --exclude-drawing-sheet \
+                --layers 'F.Cu,F.SilkS,F.Mask,Edge.Cuts' \
+                kicad/*.kicad_pcb
+
+              # Export PCB back (2D)
+              kicad-cli pcb export svg --mode-single \
+                -o 'images/pcbb.svg' \
+                --page-size-mode 2 \
+                -m \
+                --exclude-drawing-sheet \
+                --layers 'B.Cu,B.SilkS,B.Mask,Edge.Cuts' \
+                kicad/*.kicad_pcb
+
+              # Render PCB front (3D raytraced PNG, nicer lighting)
+              kicad-cli pcb render \
+                --output 'images/board.front.png' \
+                --width 3000 \
+                --height 3000 \
+                --side top \
+                --quality basic \
+                --background transparent \
+                kicad/*.kicad_pcb
+
+              # Render PCB back (3D raytraced PNG, nicer lighting)
+              kicad-cli pcb render \
+                --output 'images/board.back.png' \
+                --width 3000 \
+                --height 3000 \
+                --side bottom \
+                --quality basic \
+                --background transparent \
+                kicad/*.kicad_pcb
+
+              # Export high-detail 3D STEP model
+              # Some boards cause 'Wire self-interference' warnings and a non-zero exit,
+              # but still produce a valid STEP file. Treat that as a warning, not a hard failure.
+              if ! kicad-cli pcb export step \
+                --output 'images/board.step' \
+                --force \
+                --subst-models \
+                kicad/*.kicad_pcb; then
+
+                if [ -f 'images/board.step' ]; then
+                  echo 'WARNING: kicad-cli pcb export step returned a non-zero exit code,'
+                  echo 'but images/board.step was created. Continuing pipeline.'
+                else
+                  echo 'ERROR: STEP export failed and no images/board.step was created.'
+                  exit 1
+                fi
+              fi
+            "
+
+      # Crop the rendered 3D board images in-place using ImageMagick
+      - name: Crop rendered board images
+        run: |
+          mogrify -trim +repage images/board.front.png
+          mogrify -trim +repage images/board.back.png
+
+      # 3) Configure Git user/email
+      - name: Configure Git
+        run: |
+          git config user.name "KiCad Export Bot"
+          git config user.email "kicad-export-bot[bot]@users.noreply.github.com"
+
+      # 5) Commit and push changes to main using the GitHub App token
+      - name: Commit changes using the App token
+        run: |
+          git add images/*
+          git commit -m "Update KiCad images" || echo "No changes to commit."
+          git remote set-url origin "https://x-access-token:${{ steps.create_app_token.outputs.token }}@github.com/${{ github.repository }}.git"
+          git push origin main
+
+      # 6) Notify completion
+      - name: Notify completion
+        run: echo "Updated images and pushed changes to the repository."
